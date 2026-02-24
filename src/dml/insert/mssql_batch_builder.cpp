@@ -67,6 +67,15 @@ vector<string> MSSQLBatchBuilder::SerializeRow(DataChunk &chunk, idx_t row_index
 		// Get vector from chunk (assumes chunk columns match insert_column_indices order)
 		auto &vector = chunk.data[i];
 		auto literal = MSSQLValueSerializer::SerializeFromVector(vector, row_index, col.duckdb_type);
+
+		// XML columns: reject if serialized literal exceeds SQL Server's TDS buffer limit
+		if (col.mssql_type == "xml" && literal.size() > 4096) {
+			throw InvalidInputException(
+				"MSSQL Error: XML column '%s' value is too large for INSERT via SQL literals "
+				"(%zu bytes, limit 4096). Use COPY TO with BCP protocol instead (FORMAT bcp).",
+				col.name.c_str(), literal.size());
+		}
+
 		literals.push_back(std::move(literal));
 	}
 
