@@ -452,11 +452,10 @@ MSSQLContext::MSSQLContext(const string &name, const string &secret_name) : name
 // MSSQLContextManager implementation
 //===----------------------------------------------------------------------===//
 
-static atomic<idx_t> g_next_context_manager_key {1};
+static atomic<idx_t> g_next_context_manager_key{1};
 
 MSSQLStorageExtensionInfo::MSSQLStorageExtensionInfo()
-	: context_manager_key(g_next_context_manager_key.fetch_add(1, std::memory_order_relaxed)) {
-}
+	: context_manager_key(g_next_context_manager_key.fetch_add(1, std::memory_order_relaxed)) {}
 
 // Static storage for context managers - keyed by per-storage-extension instance id.
 static case_insensitive_map_t<unique_ptr<MSSQLContextManager>> g_context_managers;
