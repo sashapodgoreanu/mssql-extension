@@ -1,6 +1,55 @@
 {
     "version": "0.2.0",
     "configurations": [
+    {
+      "name": "Attach native to running C# process",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}",
+      "justMyCode": false,
+      "symbolSearchPath": "${workspaceFolder}/build/debug/extension/mssql;${workspaceFolder}/build/debug/src"
+    },
+        {
+            "name": "Debug DuckDB (Windows MSVC)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug/duckdb.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "DUCKDB_ALLOW_UNSIGNED_EXTENSIONS",
+                    "value": "1"
+                },
+                {
+                    "name": "MSSQL_DEBUG",
+                    "value": "3"
+                }
+            ],
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        },
+        {
+            "name": "Debug Tests (Windows MSVC)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug/test/unittest.exe",
+            "args": ["*mssql*", "--force-reload"],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build Debug (Windows MSVC)",
+            "environment": [
+                {
+                    "name": "DUCKDB_ALLOW_UNSIGNED_EXTENSIONS",
+                    "value": "1"
+                },
+                {
+                    "name": "MSSQL_DEBUG",
+                    "value": "3"
+                }
+            ],
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        },
         {
             "name": "Debug",
             "type": "lldb",

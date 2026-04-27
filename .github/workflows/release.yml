@@ -181,7 +181,7 @@ jobs:
           if-no-files-found: error
 
   # ============================================================================
-  # Build Windows (MSVC) - Matches community-extensions CI configuration
+  # Build Windows (MSVC)
   # ============================================================================
   build-windows-msvc:
     name: Build (windows_amd64)
@@ -302,7 +302,7 @@ jobs:
           if-no-files-found: error
 
   # ============================================================================
-  # Build Windows (MinGW) - Matches community-extensions CI configuration
+  # Build Windows (MinGW)
   # ============================================================================
   build-windows-mingw:
     name: Build (windows_amd64_mingw)
@@ -648,18 +648,43 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect and rename artifacts
+      - name: Detect DuckDB version
+        id: duckdb
         run: |
-          mkdir -p release
-          find artifacts -name "*.duckdb_extension" -exec cp {} release/ \;
-          ls -la release/
+          chmod +x artifacts/duckdb-cli-linux_amd64/duckdb
+          DUCKDB_VERSION="$(artifacts/duckdb-cli-linux_amd64/duckdb -csv -noheader -c "select library_version from pragma_version()")"
+          echo "version=$DUCKDB_VERSION" >> $GITHUB_OUTPUT
+          echo "DuckDB version: $DUCKDB_VERSION"
 
-      - name: Generate SHA256 checksums
+      - name: Build GitHub extension repository assets
         run: |
-          cd release
-          sha256sum *.duckdb_extension > SHA256SUMS.txt
-          echo "=== SHA256SUMS.txt ==="
-          cat SHA256SUMS.txt
+          set -euo pipefail
+
+          mkdir -p release
+
+          declare -A artifacts_by_rid=(
+            [linux_amd64]="mssql-${{ steps.version.outputs.ext_version }}-linux_amd64"
+            [linux_arm64]="mssql-${{ steps.version.outputs.ext_version }}-linux_arm64"
+            [osx_arm64]="mssql-${{ steps.version.outputs.ext_version }}-osx_arm64"
+            [windows_amd64]="mssql-${{ steps.version.outputs.ext_version }}-windows_amd64"
+            [windows_amd64_mingw]="mssql-${{ steps.version.outputs.ext_version }}-windows_amd64_mingw"
+          )
+
+          for rid in "${!artifacts_by_rid[@]}"; do
+            artifact_dir="artifacts/${artifacts_by_rid[$rid]}"
+            src="$(find "$artifact_dir" -maxdepth 1 -name '*.duckdb_extension' -print -quit)"
+            if [ -z "$src" ]; then
+              echo "Missing extension artifact for $rid in $artifact_dir" >&2
+              exit 1
+            fi
+
+            dst_dir="release/${{ steps.duckdb.outputs.version }}/$rid"
+            mkdir -p "$dst_dir"
+            gzip -c "$src" > "$dst_dir/mssql.duckdb_extension.gz"
+            printf '%s\n' "${{ github.sha }}" > "$dst_dir/mssql.duckdb_extension.etag"
+          done
+
+          find release -type f -print | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -668,34 +693,63 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
-          files: |
-            release/*.duckdb_extension
-            release/SHA256SUMS.txt
-          fail_on_unmatched_files: true
           body: |
             ## MSSQL Extension ${{ steps.version.outputs.tag }}
 
-            Built against DuckDB v1.5 (variegata).
+            Built against DuckDB ${{ steps.duckdb.outputs.version }}.
 
             ### Downloads
 
             | Platform | Download |
             |----------|----------|
-            | Linux x64 | `mssql-${{ steps.version.outputs.ext_version }}-linux_amd64.duckdb_extension` |
-            | Linux ARM64 | `mssql-${{ steps.version.outputs.ext_version }}-linux_arm64.duckdb_extension` |
-            | macOS ARM64 | `mssql-${{ steps.version.outputs.ext_version }}-osx_arm64.duckdb_extension` |
-            | Windows x64 (MSVC) | `mssql-${{ steps.version.outputs.ext_version }}-windows_amd64.duckdb_extension` |
-            | Windows x64 (MinGW) | `mssql-${{ steps.version.outputs.ext_version }}-windows_amd64_mingw.duckdb_extension` |
+            | Linux x64 | `${{ steps.duckdb.outputs.version }}/linux_amd64/mssql.duckdb_extension.gz` |
+            | Linux ARM64 | `${{ steps.duckdb.outputs.version }}/linux_arm64/mssql.duckdb_extension.gz` |
+            | macOS ARM64 | `${{ steps.duckdb.outputs.version }}/osx_arm64/mssql.duckdb_extension.gz` |
+            | Windows x64 (MSVC) | `${{ steps.duckdb.outputs.version }}/windows_amd64/mssql.duckdb_extension.gz` |
+            | Windows x64 (MinGW) | `${{ steps.duckdb.outputs.version }}/windows_amd64_mingw/mssql.duckdb_extension.gz` |
 
-            ### Verification
-
-            ```bash
-            sha256sum -c SHA256SUMS.txt
-            ```
+            Each platform also has a matching `mssql.duckdb_extension.etag` file containing this repository commit hash.
 
             ### Installation
 
             ```sql
-            INSTALL 'path/to/mssql-${{ steps.version.outputs.ext_version }}-<PLATFORM>.duckdb_extension';
+            INSTALL 'https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.duckdb.outputs.version }}/<PLATFORM>/mssql.duckdb_extension.gz';
             LOAD mssql;
             ```
+
+      - name: Upload repository assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_ID="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
+
+          find release -type f | sort | while read -r file; do
+            asset_name="${file#release/}"
+            content_type="application/octet-stream"
+            if [[ "$asset_name" == *.gz ]]; then
+              content_type="application/gzip"
+            elif [[ "$asset_name" == *.etag ]]; then
+              content_type="text/plain"
+            fi
+
+            existing_ids="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" \
+              --jq ".[] | select(.name == \"$asset_name\") | .id")"
+            if [ -n "$existing_ids" ]; then
+              while read -r asset_id; do
+                [ -n "$asset_id" ] && gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+              done <<< "$existing_ids"
+            fi
+
+            encoded_name="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$asset_name")"
+            upload_url="https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${encoded_name}"
+            echo "Uploading ${asset_name}"
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Content-Type: ${content_type}" \
+              --data-binary @"${file}" \
+              "${upload_url}" > /dev/null
+          done

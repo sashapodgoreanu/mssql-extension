@@ -29,6 +29,47 @@
             "detail": "Build extension in debug mode with symbols"
         },
         {
+            "label": "Build Debug (Windows MSVC)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/build_windows.ps1",
+                "-Configuration",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": ["$msCompile"],
+            "detail": "Build debug extension with Visual Studio MSVC tools"
+        },
+        {
+            "label": "Build Debug Clean (Windows MSVC)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/build_windows.ps1",
+                "-Configuration",
+                "Debug",
+                "-Clean"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": ["$msCompile"],
+            "detail": "Clean and build debug extension with Visual Studio MSVC tools"
+        },
+        {
             "label": "Clean",
             "type": "shell",
             "command": "make",

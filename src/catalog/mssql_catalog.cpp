@@ -70,7 +70,15 @@ MSSQLCatalog::MSSQLCatalog(AttachedDatabase &db, const string &context_name,
 	statistics_provider_ = make_uniq<MSSQLStatisticsProvider>();
 }
 
-MSSQLCatalog::~MSSQLCatalog() = default;
+MSSQLCatalog::~MSSQLCatalog() {
+	try {
+		auto &manager = MSSQLContextManager::Get(GetDatabase());
+		manager.UnregisterContext(context_name_);
+	} catch (...) {
+		// DuckDB does not call OnDetach when the database is closed through the C API.
+		// Destructors must not throw, so this close-path cleanup is best-effort.
+	}
+}
 
 //===----------------------------------------------------------------------===//
 // Initialization

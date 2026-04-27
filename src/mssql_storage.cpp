@@ -452,16 +452,30 @@ MSSQLContext::MSSQLContext(const string &name, const string &secret_name) : name
 // MSSQLContextManager implementation
 //===----------------------------------------------------------------------===//
 
-// Static storage for context managers - keyed by DatabaseInstance pointer
+static atomic<idx_t> g_next_context_manager_key {1};
+
+MSSQLStorageExtensionInfo::MSSQLStorageExtensionInfo()
+    : context_manager_key(g_next_context_manager_key.fetch_add(1, std::memory_order_relaxed)) {
+}
+
+// Static storage for context managers - keyed by per-storage-extension instance id.
 static case_insensitive_map_t<unique_ptr<MSSQLContextManager>> g_context_managers;
 static mutex g_context_managers_lock;
 
+string MSSQLContextManager::GetDatabaseKey(DatabaseInstance &db) {
+	auto storage_extension = StorageExtension::Find(DBConfig::GetConfig(db), "mssql");
+	if (storage_extension && storage_extension->storage_info) {
+		auto &mssql_info = static_cast<MSSQLStorageExtensionInfo &>(*storage_extension->storage_info);
+		return StringUtil::Format("%llu", (unsigned long long)mssql_info.context_manager_key);
+	}
+
+	// Fallback for defensive callers before the MSSQL storage extension is registered.
+	return StringUtil::Format("ptr:%llu", (unsigned long long)(uintptr_t)&db);
+}
+
 MSSQLContextManager &MSSQLContextManager::Get(DatabaseInstance &db) {
+	auto db_key = GetDatabaseKey(db);
 	lock_guard<mutex> guard(g_context_managers_lock);
-
-	// Use pointer address as unique key - cast to size_t for formatting
-	string db_key = StringUtil::Format("%llu", (unsigned long long)(uintptr_t)&db);
-
 	auto it = g_context_managers.find(db_key);
 	if (it == g_context_managers.end()) {
 		auto manager = make_uniq<MSSQLContextManager>();
@@ -475,7 +489,13 @@ MSSQLContextManager &MSSQLContextManager::Get(DatabaseInstance &db) {
 void MSSQLContextManager::RegisterContext(const string &name, shared_ptr<MSSQLContext> ctx) {
 	lock_guard<mutex> guard(lock);
 	if (contexts.find(name) != contexts.end()) {
-		throw CatalogException("MSSQL Error: Context '%s' already exists. Use a different name or DETACH first.", name);
+		string db_key = "unknown";
+		if (ctx->attached_db) {
+			db_key = GetDatabaseKey(ctx->attached_db->GetDatabase());
+		}
+		throw CatalogException(
+			"MSSQL Error: Context '%s' already exists. Use a different name or DETACH first. db_key '%s'", name,
+			db_key);
 	}
 	contexts[name] = std::move(ctx);
 }
@@ -998,6 +1018,7 @@ void RegisterMSSQLStorageExtension(ExtensionLoader &loader) {
 	auto storage_ext = make_shared_ptr<StorageExtension>();
 	storage_ext->attach = MSSQLAttach;
 	storage_ext->create_transaction_manager = MSSQLCreateTransactionManager;
+	storage_ext->storage_info = make_shared_ptr<MSSQLStorageExtensionInfo>();
 	StorageExtension::Register(config, "mssql", std::move(storage_ext));
 }
 

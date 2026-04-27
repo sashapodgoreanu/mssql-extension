@@ -312,7 +312,6 @@ jobs:
 
   # ============================================================================
   # Windows Build Job - MSVC (Visual Studio 2022)
-  # Matches community-extensions CI configuration
   # (Manual trigger only via workflow_dispatch)
   # ============================================================================
   build-windows-msvc:
@@ -339,7 +338,7 @@ jobs:
           echo "============================================"
           echo "DuckDB Commit: $DUCKDB_COMMIT"
           echo "Platform: windows_amd64 (MSVC)"
-          echo "vcpkg Triplet: x64-windows-static-release (matches community-extensions CI / extension-ci-tools main)"
+          echo "vcpkg Triplet: x64-windows-static-release"
           echo "============================================"
 
       - name: Setup vcpkg
@@ -395,7 +394,6 @@ jobs:
 
   # ============================================================================
   # Windows Build Job - MinGW (Rtools 4.2)
-  # Matches community-extensions CI configuration
   # (Manual trigger only via workflow_dispatch)
   # ============================================================================
   build-windows-mingw:

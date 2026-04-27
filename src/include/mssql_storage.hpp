@@ -114,6 +114,7 @@ class MSSQLContextManager {
 public:
 	// Get singleton instance for a DatabaseInstance
 	static MSSQLContextManager &Get(DatabaseInstance &db);
+	static string GetDatabaseKey(DatabaseInstance &db);
 
 	// Context operations
 	void RegisterContext(const string &name, shared_ptr<MSSQLContext> ctx);
@@ -131,7 +132,9 @@ private:
 // MSSQLStorageExtensionInfo - Shared state for storage extension
 //===----------------------------------------------------------------------===//
 struct MSSQLStorageExtensionInfo : public StorageExtensionInfo {
-	// Reserved for future connection pooling, etc.
+	MSSQLStorageExtensionInfo();
+
+	idx_t context_manager_key;
 };
 
 //===----------------------------------------------------------------------===//
