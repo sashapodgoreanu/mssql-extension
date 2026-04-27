@@ -657,7 +657,7 @@ jobs:
           echo "version=$DUCKDB_VERSION" >> $GITHUB_OUTPUT
           echo "DuckDB version: $DUCKDB_VERSION"
 
-      - name: Build GitHub extension repository assets
+      - name: Build GitHub Release assets
         run: |
           set -euo pipefail
 
@@ -679,10 +679,8 @@ jobs:
               exit 1
             fi
 
-            dst_dir="release/${{ steps.duckdb.outputs.version }}/$rid"
-            mkdir -p "$dst_dir"
-            gzip -c "$src" > "$dst_dir/mssql.duckdb_extension.gz"
-            printf '%s\n' "${{ github.sha }}" > "$dst_dir/mssql.duckdb_extension.etag"
+            gzip -c "$src" > "release/${rid}.mssql.duckdb_extension.gz"
+            printf '%s\n' "${{ github.sha }}" > "release/${rid}.mssql.duckdb_extension.etag"
           done
 
           find release -type f -print | sort
@@ -703,18 +701,18 @@ jobs:
 
             | Platform | Download |
             |----------|----------|
-            | Linux x64 | `${{ steps.duckdb.outputs.version }}/linux_amd64/mssql.duckdb_extension.gz` |
-            | Linux ARM64 | `${{ steps.duckdb.outputs.version }}/linux_arm64/mssql.duckdb_extension.gz` |
-            | macOS ARM64 | `${{ steps.duckdb.outputs.version }}/osx_arm64/mssql.duckdb_extension.gz` |
-            | Windows x64 (MSVC) | `${{ steps.duckdb.outputs.version }}/windows_amd64/mssql.duckdb_extension.gz` |
-            | Windows x64 (MinGW) | `${{ steps.duckdb.outputs.version }}/windows_amd64_mingw/mssql.duckdb_extension.gz` |
+            | Linux x64 | `linux_amd64.mssql.duckdb_extension.gz` |
+            | Linux ARM64 | `linux_arm64.mssql.duckdb_extension.gz` |
+            | macOS ARM64 | `osx_arm64.mssql.duckdb_extension.gz` |
+            | Windows x64 (MSVC) | `windows_amd64.mssql.duckdb_extension.gz` |
+            | Windows x64 (MinGW) | `windows_amd64_mingw.mssql.duckdb_extension.gz` |
 
-            Each platform also has a matching `mssql.duckdb_extension.etag` file containing this repository commit hash.
+            Each platform also has a matching `<rid>.mssql.duckdb_extension.etag` file containing this repository commit hash.
 
             ### Installation
 
             ```sql
-            INSTALL 'https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.duckdb.outputs.version }}/<PLATFORM>/mssql.duckdb_extension.gz';
+            INSTALL 'https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/<RID>.mssql.duckdb_extension.gz';
             LOAD mssql;
             ```
 
