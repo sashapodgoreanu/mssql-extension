@@ -55,6 +55,15 @@ using namespace duckdb::mssql::azure;
 		}                                                                                    \
 	} while (0)
 
+static uint16_t ReadUInt16LE(const std::vector<uint8_t> &data, size_t offset) {
+	return static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+}
+
+static uint32_t ReadUInt32LE(const std::vector<uint8_t> &data, size_t offset) {
+	return static_cast<uint32_t>(data[offset]) | (static_cast<uint32_t>(data[offset + 1]) << 8) |
+	       (static_cast<uint32_t>(data[offset + 2]) << 16) | (static_cast<uint32_t>(data[offset + 3]) << 24);
+}
+
 //==============================================================================
 // T012: Test UTF-16LE Token Encoding
 //==============================================================================
@@ -404,6 +413,40 @@ void test_login7_no_fedauth_extension_with_sql_auth() {
 	std::cout << "PASSED! Standard LOGIN7 does not have FeatureExt flag set." << std::endl;
 }
 
+void test_login7_sql_auth_non_ascii_password_lengths() {
+	std::cout << "\n=== Test: LOGIN7 SQL Auth with Non-ASCII Password ===" << std::endl;
+
+	// UTF-8 password: "P" + U+00E4 + "ss" + U+1F600.
+	// TDS LOGIN7 length fields count UTF-16 code units, not UTF-8 bytes.
+	std::string password = std::string("P") + "\xC3\xA4" + "ss" + "\xF0\x9F\x98\x80";
+	auto packet = tds::TdsProtocol::BuildLogin7("host", "user", password, "db", "app");
+	const auto &payload = packet.GetPayload();
+
+	ASSERT_TRUE(payload.size() >= 128);
+	ASSERT_EQ(ReadUInt32LE(payload, 0), static_cast<uint32_t>(payload.size()));
+
+	ASSERT_EQ(ReadUInt16LE(payload, 36), static_cast<uint16_t>(94));   // HostName offset
+	ASSERT_EQ(ReadUInt16LE(payload, 38), static_cast<uint16_t>(4));    // HostName cch
+	ASSERT_EQ(ReadUInt16LE(payload, 40), static_cast<uint16_t>(102));  // UserName offset
+	ASSERT_EQ(ReadUInt16LE(payload, 42), static_cast<uint16_t>(4));    // UserName cch
+	ASSERT_EQ(ReadUInt16LE(payload, 44), static_cast<uint16_t>(110));  // Password offset
+	ASSERT_EQ(ReadUInt16LE(payload, 46), static_cast<uint16_t>(6));    // Password cch: P, a-umlaut, s, s, surrogate pair
+	ASSERT_EQ(ReadUInt16LE(payload, 48), static_cast<uint16_t>(122));  // AppName follows 12 password bytes
+	ASSERT_EQ(ReadUInt16LE(payload, 50), static_cast<uint16_t>(3));    // AppName cch
+	ASSERT_EQ(ReadUInt16LE(payload, 68), static_cast<uint16_t>(136));  // Database offset
+	ASSERT_EQ(ReadUInt16LE(payload, 70), static_cast<uint16_t>(2));    // Database cch
+
+	// Verify the AppName offset lands on UTF-16LE "app"; the old UTF-8 byte count bug pointed past this field.
+	ASSERT_EQ(payload[122], static_cast<uint8_t>('a'));
+	ASSERT_EQ(payload[123], static_cast<uint8_t>(0));
+	ASSERT_EQ(payload[124], static_cast<uint8_t>('p'));
+	ASSERT_EQ(payload[125], static_cast<uint8_t>(0));
+	ASSERT_EQ(payload[126], static_cast<uint8_t>('p'));
+	ASSERT_EQ(payload[127], static_cast<uint8_t>(0));
+
+	std::cout << "PASSED! LOGIN7 password length and offsets use UTF-16 code units." << std::endl;
+}
+
 void test_login7_with_fedauth_has_extension() {
 	std::cout << "\n=== Test: LOGIN7 with FEDAUTH Extension (Azure Auth) ===" << std::endl;
 
@@ -478,6 +521,7 @@ int main() {
 
 	// T023: LOGIN7 backward compatibility
 	test_login7_no_fedauth_extension_with_sql_auth();
+	test_login7_sql_auth_non_ascii_password_lengths();
 	test_login7_with_fedauth_has_extension();
 
 	std::cout << "\n========================================" << std::endl;

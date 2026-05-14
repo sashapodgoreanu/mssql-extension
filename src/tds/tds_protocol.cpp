@@ -161,9 +161,11 @@ TdsPacket TdsProtocol::BuildLogin7(const std::string &host, const std::string &u
 	// Strings are stored as UTF-16LE, so length = chars, not bytes
 	// Offset points to position in packet (after the 94-byte header relative to start of LOGIN7 data)
 
+	std::vector<uint8_t> encoded_password = EncodePassword(password);
+
 	uint16_t hostname_len = static_cast<uint16_t>(host.size());
 	uint16_t username_len = static_cast<uint16_t>(username.size());
-	uint16_t password_len = static_cast<uint16_t>(password.size());
+	uint16_t password_len = static_cast<uint16_t>(encoded_password.size() / 2);
 	uint16_t appname_len = static_cast<uint16_t>(app_name.size());
 	uint16_t servername_len = static_cast<uint16_t>(host.size());  // Server name same as host
 	uint16_t database_len = static_cast<uint16_t>(database.size());
@@ -370,7 +372,6 @@ TdsPacket TdsProtocol::BuildLogin7(const std::string &host, const std::string &u
 	packet.AppendUTF16LE(username);
 
 	// Password (encoded, then as UTF-16LE-ish)
-	std::vector<uint8_t> encoded_password = EncodePassword(password);
 	packet.AppendPayload(encoded_password);
 
 	// AppName (UTF-16LE)
