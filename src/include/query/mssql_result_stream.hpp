@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include "duckdb.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "tds/encoding/type_converter.hpp"
 #include "tds/tds_connection.hpp"
@@ -32,7 +33,8 @@ public:
 	// client_context is needed for transaction-aware connection release
 	// query_timeout_seconds: query execution timeout (0 = no timeout, default: 30)
 	MSSQLResultStream(std::shared_ptr<tds::TdsConnection> connection, const string &sql, const string &context_name,
-					  ClientContext *client_context = nullptr, int query_timeout_seconds = 30);
+					  ClientContext *client_context = nullptr, int query_timeout_seconds = 30,
+					  std::unique_ptr<unique_lock<mutex>> operation_lock = nullptr);
 	~MSSQLResultStream();
 
 	// Non-copyable, non-movable (manages connection)
@@ -131,8 +133,15 @@ private:
 	// Similar to DrainAfterCancel but without sending ATTENTION signal
 	void DrainRemainingTokens();
 
+	// Release the transaction operation lock after the TDS session returns to
+	// Idle or is closed.
+	void ReleaseOperationLock();
+
 	// Connection (shared with pool)
 	std::shared_ptr<tds::TdsConnection> connection_;
+
+	// Held while a SQL batch is active on a transaction-pinned connection.
+	std::unique_ptr<unique_lock<mutex>> operation_lock_;
 
 	// Context name for pool release
 	string context_name_;

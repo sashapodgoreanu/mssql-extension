@@ -43,6 +43,9 @@ public:
 	//! Get the connection mutex for serializing operations on the pinned connection
 	mutex &GetConnectionMutex();
 
+	//! Get the operation mutex for serializing active batches on the pinned connection
+	mutex &GetOperationMutex();
+
 	//! Check if SQL Server transaction has been started on the pinned connection
 	bool IsSqlServerTransactionActive() const;
 
@@ -76,6 +79,10 @@ private:
 
 	//! Mutex for serializing concurrent operations on pinned connection
 	mutable mutex connection_mutex_;
+
+	//! Mutex for serializing SQL batches on the pinned connection.
+	//! SQL Server TDS sessions cannot run multiple active batches without MARS.
+	mutex operation_mutex_;
 
 	//! True if BEGIN TRANSACTION has been sent to SQL Server
 	bool sql_server_transaction_active_ = false;

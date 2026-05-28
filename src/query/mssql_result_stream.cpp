@@ -38,8 +38,9 @@ namespace duckdb {
 
 MSSQLResultStream::MSSQLResultStream(std::shared_ptr<tds::TdsConnection> connection, const string &sql,
 									 const string &context_name, ClientContext *client_context,
-									 int query_timeout_seconds)
+									 int query_timeout_seconds, std::unique_ptr<unique_lock<mutex>> operation_lock)
 	: connection_(std::move(connection)),
+	  operation_lock_(std::move(operation_lock)),
 	  context_name_(context_name),
 	  client_context_(client_context),
 	  sql_(sql),
@@ -74,6 +75,7 @@ MSSQLResultStream::~MSSQLResultStream() {
 		// Without a ClientContext we can't look up the catalog; the shared_ptr
 		// drop closes the connection on this thread — no leak, just no reuse.
 		// Same outcome when catalog lookup throws (catalog detached mid-query).
+		ReleaseOperationLock();
 		if (client_context_) {
 			try {
 				auto &catalog = Catalog::GetCatalog(*client_context_, context_name_);
@@ -164,6 +166,7 @@ bool MSSQLResultStream::Initialize() {
 				}
 				// Final DONE with no columns — empty result set
 				state_ = MSSQLResultStreamState::Complete;
+				ReleaseOperationLock();
 				return true;
 			}
 
@@ -247,6 +250,7 @@ idx_t MSSQLResultStream::FillChunk(DataChunk &chunk) {
 				state_ = MSSQLResultStreamState::Complete;
 				// Transition connection back to Idle
 				connection_->TransitionState(tds::ConnectionState::Executing, tds::ConnectionState::Idle);
+				ReleaseOperationLock();
 			}
 			break;
 		}
@@ -272,6 +276,7 @@ idx_t MSSQLResultStream::FillChunk(DataChunk &chunk) {
 			if (parser_.GetState() == tds::ParserState::Complete) {
 				state_ = MSSQLResultStreamState::Complete;
 				connection_->TransitionState(tds::ConnectionState::Executing, tds::ConnectionState::Idle);
+				ReleaseOperationLock();
 				goto exit_loop;	 // Exit the while loop
 			}
 			if (parser_.GetState() == tds::ParserState::Error) {
@@ -304,6 +309,7 @@ idx_t MSSQLResultStream::FillChunk(DataChunk &chunk) {
 			if (parser_.GetState() == tds::ParserState::Complete) {
 				state_ = MSSQLResultStreamState::Complete;
 				connection_->TransitionState(tds::ConnectionState::Executing, tds::ConnectionState::Idle);
+				ReleaseOperationLock();
 			}
 			break;
 
@@ -464,6 +470,7 @@ void MSSQLResultStream::DrainAfterCancel() {
 							token_count);
 			connection_->Close();
 			state_ = MSSQLResultStreamState::Error;
+			ReleaseOperationLock();
 			return;
 		}
 
@@ -490,6 +497,7 @@ void MSSQLResultStream::DrainAfterCancel() {
 										.count());
 					state_ = MSSQLResultStreamState::Complete;
 					connection_->TransitionState(tds::ConnectionState::Cancelling, tds::ConnectionState::Idle);
+					ReleaseOperationLock();
 					return;
 				}
 				// Got DONE but not ATTN - parser may have set state to Complete
@@ -515,6 +523,7 @@ void MSSQLResultStream::DrainRemainingTokens() {
 		if (elapsed > timeout) {
 			MSSQL_DEBUG_LOG(1, "DrainRemainingTokens: TIMEOUT, closing connection");
 			connection_->Close();
+			ReleaseOperationLock();
 			return;
 		}
 
@@ -524,26 +533,34 @@ void MSSQLResultStream::DrainRemainingTokens() {
 			auto done = parser_.GetDone();
 			if (done.IsFinal()) {
 				connection_->TransitionState(tds::ConnectionState::Executing, tds::ConnectionState::Idle);
+				ReleaseOperationLock();
 				return;
 			}
 		} else if (token == tds::ParsedTokenType::NeedMoreData) {
 			if (!ReadMoreData(cancel_read_timeout_ms_)) {
 				MSSQL_DEBUG_LOG(1, "DrainRemainingTokens: ReadMoreData failed, closing connection");
 				connection_->Close();
+				ReleaseOperationLock();
 				return;
 			}
 		} else if (token == tds::ParsedTokenType::None) {
 			if (parser_.GetState() == tds::ParserState::Complete) {
 				connection_->TransitionState(tds::ConnectionState::Executing, tds::ConnectionState::Idle);
+				ReleaseOperationLock();
 				return;
 			}
 			if (parser_.GetState() == tds::ParserState::Error) {
 				connection_->Close();
+				ReleaseOperationLock();
 				return;
 			}
 		}
 		// All other tokens: skip (ROW, ColMetadata, Info, Error, etc.)
 	}
+}
+
+void MSSQLResultStream::ReleaseOperationLock() {
+	operation_lock_.reset();
 }
 
 void MSSQLResultStream::SurfaceWarnings(ClientContext &context) {

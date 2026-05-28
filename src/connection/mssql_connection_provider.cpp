@@ -236,6 +236,21 @@ std::shared_ptr<tds::TdsConnection> ConnectionProvider::GetConnection(ClientCont
 	return conn;
 }
 
+std::unique_ptr<unique_lock<mutex>> ConnectionProvider::AcquireTransactionOperationLock(ClientContext &context,
+																						MSSQLCatalog &catalog) {
+	if (context.transaction.IsAutoCommit()) {
+		return nullptr;
+	}
+	auto *txn = TryGetMSSQLTransaction(context, catalog);
+	if (!txn) {
+		return nullptr;
+	}
+	MSSQL_CONN_LOG("AcquireTransactionOperationLock: waiting for pinned transaction operation lock");
+	std::unique_ptr<unique_lock<mutex>> lock(new unique_lock<mutex>(txn->GetOperationMutex()));
+	MSSQL_CONN_LOG("AcquireTransactionOperationLock: acquired pinned transaction operation lock");
+	return lock;
+}
+
 //===----------------------------------------------------------------------===//
 // ConnectionProvider::ReleaseConnection
 //===----------------------------------------------------------------------===//

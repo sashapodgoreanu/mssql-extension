@@ -136,6 +136,10 @@ mutex &MSSQLTransaction::GetConnectionMutex() {
 	return connection_mutex_;
 }
 
+mutex &MSSQLTransaction::GetOperationMutex() {
+	return operation_mutex_;
+}
+
 bool MSSQLTransaction::IsSqlServerTransactionActive() const {
 	lock_guard<mutex> lock(connection_mutex_);
 	return sql_server_transaction_active_;

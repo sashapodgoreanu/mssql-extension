@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include "duckdb/common/mutex.hpp"
 
 namespace duckdb {
 
@@ -48,6 +49,12 @@ public:
 	//! @throws Exception if connection cannot be acquired
 	static std::shared_ptr<tds::TdsConnection> GetConnection(ClientContext &context, MSSQLCatalog &catalog,
 															 int timeout_ms = -1);
+
+	//! Acquire the per-transaction operation lock when using a pinned connection.
+	//! Returns nullptr in autocommit mode. Hold this while a batch is active on
+	//! the pinned TDS session.
+	static std::unique_ptr<unique_lock<mutex>> AcquireTransactionOperationLock(ClientContext &context,
+																			   MSSQLCatalog &catalog);
 
 	//! Release a connection back to the pool (no-op if in transaction)
 	//! If in a DuckDB transaction, this is a no-op - connection stays pinned

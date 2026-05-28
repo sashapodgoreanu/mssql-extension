@@ -66,6 +66,8 @@ unique_ptr<MSSQLResultStream> MSSQLQueryExecutor::Execute(ClientContext &context
 	MSSQL_EXEC_DEBUG_LOG(1, "Execute: pool stats - total=%d, active=%d, idle=%d", (int)stats.total_connections,
 						 (int)stats.active_connections, (int)stats.idle_connections);
 
+	auto operation_lock = ConnectionProvider::AcquireTransactionOperationLock(context, mssql_catalog);
+
 	// Use ConnectionProvider for transaction-aware connection acquisition
 	auto acquire_start = std::chrono::steady_clock::now();
 	MSSQL_EXEC_DEBUG_LOG(1, "Execute: acquiring connection (timeout=%dms)...", acquire_timeout_ms_);
@@ -85,7 +87,8 @@ unique_ptr<MSSQLResultStream> MSSQLQueryExecutor::Execute(ClientContext &context
 	// Create result stream with the shared connection
 	// Pass client context for transaction-aware connection release in destructor
 	auto result_stream =
-		make_uniq<MSSQLResultStream>(std::move(connection), sql, context_name_, &context, query_timeout);
+		make_uniq<MSSQLResultStream>(std::move(connection), sql, context_name_, &context, query_timeout,
+									 std::move(operation_lock));
 
 	// Initialize the stream (sends query, waits for COLMETADATA)
 	// If Initialize() throws, result_stream destructor will release connection back to pool
