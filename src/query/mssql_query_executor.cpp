@@ -86,9 +86,8 @@ unique_ptr<MSSQLResultStream> MSSQLQueryExecutor::Execute(ClientContext &context
 
 	// Create result stream with the shared connection
 	// Pass client context for transaction-aware connection release in destructor
-	auto result_stream =
-		make_uniq<MSSQLResultStream>(std::move(connection), sql, context_name_, &context, query_timeout,
-									 std::move(operation_lock));
+	auto result_stream = make_uniq<MSSQLResultStream>(std::move(connection), sql, context_name_, &context,
+													  query_timeout, std::move(operation_lock));
 
 	// Initialize the stream (sends query, waits for COLMETADATA)
 	// If Initialize() throws, result_stream destructor will release connection back to pool
