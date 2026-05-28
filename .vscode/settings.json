@@ -4,7 +4,7 @@
     "cmake.sourceDirectory": "${workspaceFolder}/duckdb",
     "cmake.configureArgs": [
         "-DDUCKDB_EXTENSION_CONFIGS=${workspaceFolder}/extension_config.cmake",
-        "-DCMAKE_BUILD_TYPE=Debug"
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
     ],
     "cmake.generator": "Ninja",
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",

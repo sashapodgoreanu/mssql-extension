@@ -29,6 +29,47 @@
             "detail": "Build extension in debug mode with symbols"
         },
         {
+            "label": "Build debug (Windows MSVC)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/build_windows.ps1",
+                "-Configuration",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": ["$msCompile"],
+            "detail": "Build RelWithDebInfo extension with Visual Studio MSVC tools; compatible with downloaded DuckDB extensions"
+        },
+        {
+            "label": "Build debug Clean (Windows MSVC)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/build_windows.ps1",
+                "-Configuration",
+                "Debug",
+                "-Clean"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": ["$msCompile"],
+            "detail": "Clean and build RelWithDebInfo extension with Visual Studio MSVC tools; compatible with downloaded DuckDB extensions"
+        },
+        {
             "label": "Clean",
             "type": "shell",
             "command": "make",

@@ -23,7 +23,7 @@ include extension-ci-tools/makefiles/duckdb_extension.Makefile
 # Custom targets (preserved from original Makefile)
 #
 
-.PHONY: vcpkg-setup docker-up docker-down docker-status integration-test test-all test-debug test-simple-query test-multi-instance-pool-isolation test-issue-96-attach-loop test-spec047-us1 test-result-stream-registry-isolation test-spec047-us3 test-token-cache-isolation test-spec047-us-sec help
+.PHONY: vcpkg-setup make_windows make_windows_develop make_windows_develop_clean make_windows_debug make_windows_release make_windows_debug_clean docker-up docker-down docker-status integration-test test-all test-debug test-simple-query test-multi-instance-pool-isolation test-issue-96-attach-loop test-spec047-us1 test-result-stream-registry-isolation test-spec047-us3 test-token-cache-isolation test-spec047-us-sec help
 
 # Bootstrap vcpkg if not present
 vcpkg-setup:
@@ -32,6 +32,25 @@ vcpkg-setup:
 		git clone https://github.com/microsoft/vcpkg.git $(VCPKG_DIR); \
 		$(VCPKG_DIR)/bootstrap-vcpkg.sh; \
 	fi
+
+# Native Windows/MSVC builds. These targets intentionally use PowerShell so
+# Windows users do not depend on Unix shell path semantics from make recipes.
+make_windows: make_windows_develop
+
+make_windows_develop:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Configuration Develop
+
+make_windows_develop_clean:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Configuration Develop -Clean
+
+make_windows_debug:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Configuration Debug
+
+make_windows_release:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Configuration Release
+
+make_windows_debug_clean:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Configuration Debug -Clean
 
 # Docker targets for SQL Server test container
 DOCKER_COMPOSE := docker/docker-compose.yml
@@ -445,6 +464,10 @@ help:
 	@echo "  make test-all             - Run all tests"
 	@echo "  make test-debug           - Run tests with debug build"
 	@echo "  make test-simple-query    - Run C++ simple query test"
+	@echo "  make make_windows         - Build develop version with native Windows/MSVC tooling"
+	@echo "  make make_windows_develop - Build RelWithDebInfo version with native Windows/MSVC tooling"
+	@echo "  make make_windows_debug   - Build MSVC Debug version (not compatible with downloaded extensions)"
+	@echo "  make make_windows_release - Build release version with native Windows/MSVC tooling"
 	@echo "  make docker-up            - Start SQL Server test container"
 	@echo "  make docker-down          - Stop SQL Server test container"
 	@echo "  make docker-status        - Check SQL Server container status"
