@@ -52,7 +52,8 @@ public:
 
 	//! Acquire the per-transaction operation lock when using a pinned connection.
 	//! Returns nullptr in autocommit mode. Hold this while a batch is active on
-	//! the pinned TDS session.
+	//! the pinned TDS session. Transaction query results are materialized before
+	//! this lock is released because the session does not use MARS.
 	static std::unique_ptr<unique_lock<mutex>> AcquireTransactionOperationLock(ClientContext &context,
 																			   MSSQLCatalog &catalog);
 

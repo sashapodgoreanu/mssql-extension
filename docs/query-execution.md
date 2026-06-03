@@ -215,7 +215,7 @@ MSSQLPhysicalUpdate (PhysicalOperator)
 
 ### Transaction-Aware Deferred Execution
 
-When inside an explicit DuckDB transaction, the UPDATE executor defers all SQL execution to `Finalize()`. This is because the pinned connection may be in `Executing` state while streaming rowid values during the scan phase. All rows are buffered and executed in batches after the scan completes.
+When inside an explicit DuckDB transaction, the UPDATE executor defers all SQL execution to `Finalize()`. All rows are buffered and executed in batches after the scan completes, keeping scan and write phases separate on the pinned connection.
 
 ### Batch Size Calculation
 
@@ -267,7 +267,7 @@ DELETE also uses deferred execution in explicit transactions.
 
 ## mssql_scan Function
 
-`mssql_scan(context_name, query)` executes raw T-SQL and streams results as a DuckDB table function.
+`mssql_scan(context_name, query)` executes raw T-SQL and returns results as a DuckDB table function.
 
 ```sql
 SELECT * FROM mssql_scan('mydb', 'SELECT TOP 10 * FROM users');
@@ -278,7 +278,9 @@ SELECT * FROM mssql_scan('mydb', 'SELECT TOP 10 * FROM users');
 2. **InitGlobal**: Retrieves the stored result stream (avoids double execution)
 3. **Execute**: Calls `MSSQLResultStream::FillChunk()` to stream rows
 
-A singleton result stream registry prevents the query from being executed twice (once for schema inference, once for data).
+The per-catalog result stream registry prevents the query from being executed twice (once for schema inference, once for data).
+
+In autocommit mode, rows stream directly from SQL Server. Inside an explicit transaction, the result is materialized into buffer-managed DuckDB storage before the pinned TDS connection is reused. This is required because MARS is disabled and DuckDB may initialize multiple scans before consuming any rows.
 
 ## mssql_exec Function
 
@@ -315,3 +317,4 @@ SELECT mssql_exec('mydb', 'DELETE FROM users WHERE id = 1');
 5. **LIKE pattern encoding**: uses SQL Server's bracket escaping syntax (`[%]`, `[_]`, `[[]`)
 6. **Multi-statement batch support**: `Initialize()` skips non-final DONE tokens to reach COLMETADATA from later statements
 7. **Single result set enforcement**: `FillChunk()` detects second COLMETADATA and throws clear error instead of crashing
+8. **Transaction read materialization**: keeps the single pinned TDS connection reusable for joins and other multi-scan plans without MARS

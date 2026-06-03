@@ -67,6 +67,7 @@ unique_ptr<MSSQLResultStream> MSSQLQueryExecutor::Execute(ClientContext &context
 						 (int)stats.active_connections, (int)stats.idle_connections);
 
 	auto operation_lock = ConnectionProvider::AcquireTransactionOperationLock(context, mssql_catalog);
+	auto materialize_result = operation_lock != nullptr;
 
 	// Use ConnectionProvider for transaction-aware connection acquisition
 	auto acquire_start = std::chrono::steady_clock::now();
@@ -99,6 +100,19 @@ unique_ptr<MSSQLResultStream> MSSQLQueryExecutor::Execute(ClientContext &context
 	auto init_end = std::chrono::steady_clock::now();
 	auto init_ms = std::chrono::duration_cast<std::chrono::milliseconds>(init_end - init_start).count();
 	MSSQL_EXEC_DEBUG_LOG(1, "Execute: result stream initialized in %ldms", (long)init_ms);
+
+	// A transaction-pinned TDS session cannot have multiple active result sets
+	// without MARS. DuckDB may initialize several scans before consuming any of
+	// them, so drain each transaction result before returning the stream.
+	if (materialize_result) {
+		auto materialize_start = std::chrono::steady_clock::now();
+		MSSQL_EXEC_DEBUG_LOG(1, "Execute: materializing transaction result...");
+		result_stream->Materialize();
+		auto materialize_end = std::chrono::steady_clock::now();
+		auto materialize_ms =
+			std::chrono::duration_cast<std::chrono::milliseconds>(materialize_end - materialize_start).count();
+		MSSQL_EXEC_DEBUG_LOG(1, "Execute: transaction result materialized in %ldms", (long)materialize_ms);
+	}
 
 	auto total_end = std::chrono::steady_clock::now();
 	auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();

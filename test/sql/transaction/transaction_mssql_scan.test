@@ -126,6 +126,42 @@ SELECT COUNT(*) FROM mssql_scan('txtest', 'SELECT * FROM dbo.tx_scan_test');
 statement ok
 COMMIT;
 
+# =============================================================================
+# Test 5: Multiple mssql_scan result sets in one statement do not deadlock
+# =============================================================================
+
+statement ok
+BEGIN;
+
+# A single pinned TDS connection cannot host two active result sets without
+# MARS. Transaction reads are materialized before the next scan is initialized,
+# avoiding the platform std::mutex error ("resource deadlock would occur").
+query II
+SELECT a.id, b.id
+FROM mssql_scan('txtest', 'SELECT 1 AS id') a
+JOIN mssql_scan('txtest', 'SELECT 1 AS id') b ON a.id = b.id;
+----
+1	1
+
+# Materialized results may span multiple DuckDB chunks.
+query II
+SELECT MIN(id), MAX(id)
+FROM mssql_scan(
+    'txtest',
+    'SELECT TOP 5000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS id FROM sys.all_objects a CROSS JOIN sys.all_objects b'
+);
+----
+1	5000
+
+# The transaction remains usable after the multi-scan statement.
+query I
+SELECT COUNT(*) FROM mssql_scan('txtest', 'SELECT * FROM dbo.tx_scan_test');
+----
+4
+
+statement ok
+ROLLBACK;
+
 # Final state verification
 query I
 SELECT COUNT(*) FROM mssql_scan('txtest', 'SELECT * FROM dbo.tx_scan_test');

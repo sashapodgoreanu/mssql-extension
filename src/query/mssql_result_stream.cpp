@@ -7,6 +7,7 @@
 #include "connection/mssql_connection_provider.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "tds/encoding/type_converter.hpp"
 #include "tds/tds_packet.hpp"
@@ -189,6 +190,10 @@ bool MSSQLResultStream::Initialize() {
 idx_t MSSQLResultStream::FillChunk(DataChunk &chunk) {
 	auto chunk_start = std::chrono::steady_clock::now();
 
+	if (materialized_result_) {
+		return FillMaterializedChunk(chunk);
+	}
+
 	if (state_ == MSSQLResultStreamState::Complete || state_ == MSSQLResultStreamState::Error) {
 		return 0;
 	}
@@ -344,24 +349,80 @@ exit_loop:
 	return row_count;
 }
 
+void MSSQLResultStream::Materialize() {
+	if (materialized_result_) {
+		return;
+	}
+
+	auto result = client_context_ ? make_uniq<ColumnDataCollection>(*client_context_, column_types_)
+								  : make_uniq<ColumnDataCollection>(Allocator::DefaultAllocator(), column_types_);
+	DataChunk chunk;
+	chunk.Initialize(Allocator::DefaultAllocator(), column_types_);
+
+	while (true) {
+		if (client_context_ && client_context_->interrupted) {
+			Cancel();
+			throw InterruptException();
+		}
+		if (FillChunk(chunk) == 0) {
+			break;
+		}
+		result->Append(chunk);
+	}
+
+	materialized_result_ = std::move(result);
+	MSSQL_DEBUG_LOG(1, "Materialize: buffered %llu rows and released transaction operation lock",
+					(unsigned long long)rows_read_);
+}
+
+idx_t MSSQLResultStream::FillMaterializedChunk(DataChunk &chunk) {
+	if (!materialized_scan_initialized_) {
+		materialized_result_->InitializeScan(materialized_scan_state_);
+		materialized_result_->InitializeScanChunk(materialized_scan_state_, materialized_scan_chunk_);
+		materialized_scan_initialized_ = true;
+	}
+
+	if (!materialized_result_->Scan(materialized_scan_state_, materialized_scan_chunk_)) {
+		chunk.Reset();
+		chunk.SetCardinality(0);
+		return 0;
+	}
+
+	chunk.Reset();
+	auto row_count = materialized_scan_chunk_.size();
+	auto cols_to_fill = GetColumnsToFill(chunk);
+	for (idx_t col_idx = 0; col_idx < cols_to_fill; col_idx++) {
+		auto target_vector = GetTargetVector(chunk, col_idx);
+		VectorOperations::Copy(materialized_scan_chunk_.data[col_idx], *target_vector, row_count, 0, 0);
+	}
+	chunk.SetCardinality(row_count);
+	return row_count;
+}
+
+idx_t MSSQLResultStream::GetColumnsToFill(const DataChunk &chunk) const {
+	if (!target_vectors_.empty()) {
+		return std::min(target_vectors_.size(), column_metadata_.size());
+	}
+	if (columns_to_fill_ != static_cast<idx_t>(-1)) {
+		return std::min(columns_to_fill_, static_cast<idx_t>(column_metadata_.size()));
+	}
+	return std::min(static_cast<idx_t>(column_metadata_.size()), chunk.ColumnCount());
+}
+
+Vector *MSSQLResultStream::GetTargetVector(DataChunk &chunk, idx_t col_idx) const {
+	if (!target_vectors_.empty()) {
+		return target_vectors_[col_idx];
+	}
+	if (!output_column_mapping_.empty()) {
+		return &chunk.data[output_column_mapping_[col_idx]];
+	}
+	return &chunk.data[col_idx];
+}
+
 void MSSQLResultStream::ProcessRow(DataChunk &chunk, idx_t row_idx) {
 	const auto &row = parser_.GetRow();
 
-	// Determine how many columns to fill:
-	// - If target_vectors_ is set, use those vectors instead of chunk.data
-	// - If columns_to_fill_ was explicitly set (e.g., for COUNT(*)), use that
-	// - Otherwise, fill up to chunk's column count (but not more than we have data for)
-	idx_t cols_to_fill;
-	if (!target_vectors_.empty()) {
-		// Use target vectors - columns_to_fill_ should match target_vectors_.size()
-		cols_to_fill = std::min(target_vectors_.size(), column_metadata_.size());
-	} else if (columns_to_fill_ != static_cast<idx_t>(-1)) {
-		// Explicitly set - use this value (may be 0 for COUNT(*))
-		cols_to_fill = std::min(columns_to_fill_, static_cast<idx_t>(column_metadata_.size()));
-	} else {
-		// Default behavior - fill columns that exist in both SQL result and chunk
-		cols_to_fill = std::min(static_cast<idx_t>(column_metadata_.size()), chunk.ColumnCount());
-	}
+	auto cols_to_fill = GetColumnsToFill(chunk);
 
 	// Debug: log column count info on first row
 	if (row_idx == 0) {
@@ -373,19 +434,7 @@ void MSSQLResultStream::ProcessRow(DataChunk &chunk, idx_t row_idx) {
 	}
 
 	for (idx_t col_idx = 0; col_idx < cols_to_fill; col_idx++) {
-		// Get the target vector: either from target_vectors_ or from chunk.data
-		Vector *target_vector;
-		if (!target_vectors_.empty()) {
-			// Write to target vectors (e.g., STRUCT children)
-			target_vector = target_vectors_[col_idx];
-		} else if (!output_column_mapping_.empty()) {
-			// Map SQL column index to output chunk column index
-			target_vector = &chunk.data[output_column_mapping_[col_idx]];
-		} else {
-			// Default: SQL column i goes to output i
-			target_vector = &chunk.data[col_idx];
-		}
-
+		auto target_vector = GetTargetVector(chunk, col_idx);
 		tds::encoding::TypeConverter::ConvertValue(row.values[col_idx], row.null_mask[col_idx],
 												   column_metadata_[col_idx], *target_vector, row_idx);
 	}

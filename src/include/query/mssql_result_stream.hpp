@@ -5,6 +5,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "tds/encoding/type_converter.hpp"
 #include "tds/tds_connection.hpp"
 #include "tds/tds_row_reader.hpp"
@@ -15,7 +16,8 @@ namespace duckdb {
 class ClientContext;
 
 //===----------------------------------------------------------------------===//
-// MSSQLResultStream - Streaming result iterator that yields DataChunks
+// MSSQLResultStream - Result iterator that yields DataChunks
+// Streams in autocommit mode and can serve a materialized transaction result.
 //===----------------------------------------------------------------------===//
 
 enum class MSSQLResultStreamState : uint8_t {
@@ -61,6 +63,11 @@ public:
 	// Returns number of rows written (0 when complete)
 	// Throws on error
 	idx_t FillChunk(DataChunk &chunk);
+
+	// Drain the active TDS result into a buffer-managed DuckDB collection.
+	// Used for transaction-pinned reads so the single TDS session is idle
+	// before another scan is initialized.
+	void Materialize();
 
 	// Request cancellation of the query
 	void Cancel();
@@ -126,6 +133,15 @@ private:
 	// Process parsed row into DataChunk
 	void ProcessRow(DataChunk &chunk, idx_t row_idx);
 
+	// Fill a DataChunk from a previously materialized result.
+	idx_t FillMaterializedChunk(DataChunk &chunk);
+
+	// Determine how many SQL result columns should be copied to an output chunk.
+	idx_t GetColumnsToFill(const DataChunk &chunk) const;
+
+	// Resolve the output vector for a SQL result column.
+	Vector *GetTargetVector(DataChunk &chunk, idx_t col_idx) const;
+
 	// Handle cancellation draining
 	void DrainAfterCancel();
 
@@ -160,6 +176,14 @@ private:
 	// Parser and reader
 	tds::TokenParser parser_;
 	unique_ptr<tds::RowReader> row_reader_;
+
+	// Buffer-managed result used for reads on a transaction-pinned connection.
+	// Materializing releases the TDS operation lock before DuckDB initializes
+	// another scan against the same transaction.
+	unique_ptr<ColumnDataCollection> materialized_result_;
+	ColumnDataScanState materialized_scan_state_;
+	DataChunk materialized_scan_chunk_;
+	bool materialized_scan_initialized_ = false;
 
 	// Column info (set after COLMETADATA)
 	vector<LogicalType> column_types_;

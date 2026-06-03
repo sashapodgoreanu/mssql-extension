@@ -185,6 +185,27 @@ SELECT id, name FROM txtest.dbo.tx_scan_test ORDER BY id;
 4	Fourth
 
 # =============================================================================
+# Test 7: Multiple catalog scans in one transaction statement
+# =============================================================================
+
+statement ok
+BEGIN;
+
+# DuckDB initializes both scans before consuming either one. The extension must
+# materialize each result so the pinned TDS connection is idle for the next scan.
+query IIT
+SELECT a.id, b.id, b.name
+FROM txtest.dbo.tx_scan_test a
+JOIN txtest.dbo.tx_scan_test b ON a.id = b.id
+ORDER BY a.id;
+----
+1	1	Modified
+4	4	Fourth
+
+statement ok
+ROLLBACK;
+
+# =============================================================================
 # Cleanup
 # =============================================================================
 

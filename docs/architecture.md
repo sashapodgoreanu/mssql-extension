@@ -206,7 +206,7 @@ src/
 
 | Function | Type | Signature | Purpose |
 |---|---|---|---|
-| `mssql_scan` | Table | `(context VARCHAR, query VARCHAR)` | Execute raw T-SQL, stream results |
+| `mssql_scan` | Table | `(context VARCHAR, query VARCHAR)` | Execute raw T-SQL; stream autocommit results and materialize transaction results |
 | `mssql_exec` | Scalar | `(context VARCHAR, sql VARCHAR) → BIGINT` | Execute DDL/DML, return affected rows |
 | `mssql_open` | Scalar | `(conn_string VARCHAR) → BIGINT` | Open diagnostic connection |
 | `mssql_close` | Scalar | `(handle BIGINT) → BOOLEAN` | Close diagnostic connection |

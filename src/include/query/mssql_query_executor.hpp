@@ -19,8 +19,9 @@ public:
 	explicit MSSQLQueryExecutor(const std::string &context_name);
 	~MSSQLQueryExecutor() = default;
 
-	// Execute a SQL query and return a streaming result
-	// Acquires connection from pool, sends SQL_BATCH, returns result stream
+	// Execute a SQL query and return a result stream.
+	// Autocommit results stream from SQL Server; transaction results are
+	// materialized before the pinned connection is reused.
 	// Throws on connection failure or initial protocol errors
 	unique_ptr<MSSQLResultStream> Execute(ClientContext &context, const std::string &sql);
 

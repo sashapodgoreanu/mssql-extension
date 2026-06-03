@@ -15,6 +15,7 @@ Extends DuckDB's `Transaction` base class. One instance per explicit DuckDB tran
 ```cpp
 std::shared_ptr<tds::TdsConnection> pinned_connection_;   // Pinned for transaction duration
 mutable mutex connection_mutex_;                            // Serialize operations
+mutex operation_mutex_;                                     // Guard active TDS result stream
 bool sql_server_transaction_active_;                        // BEGIN TRANSACTION sent?
 uint8_t transaction_descriptor_[8];                         // From ENVCHANGE
 bool has_transaction_descriptor_;
@@ -28,6 +29,7 @@ uint32_t savepoint_counter_;                                // For future savepo
 | `GetPinnedConnection()` | Return pinned connection (may be nullptr) |
 | `HasPinnedConnection()` | Check if connection is pinned |
 | `SetPinnedConnection(conn)` | Pin connection on first DML |
+| `GetOperationMutex()` | Return the mutex guarding an active batch/result stream |
 | `IsSqlServerTransactionActive()` | Check if BEGIN TRANSACTION sent |
 | `SetSqlServerTransactionActive(bool)` | Update SQL Server transaction state |
 | `GetTransactionDescriptor()` | Get 8-byte descriptor (nullptr if not set) |
@@ -273,6 +275,14 @@ No `SET TRANSACTION ISOLATION LEVEL` is issued by the extension. Users who need 
 
 Multiple DuckDB connections can have concurrent transactions against the same SQL Server. Each gets its own pinned TDS connection from the pool. SQL Server maintains isolation between them via its normal locking mechanisms.
 
+### Multiple Active Result Sets
+
+The TDS connection does not enable MARS, so one transaction-pinned connection can have only one active result set. DuckDB may initialize multiple scans before consuming any of them, including joins and DuckLake metadata queries.
+
+To support these plans without opening another SQL Server transaction, result-producing queries inside an explicit transaction are materialized into buffer-managed DuckDB storage before the transaction operation lock is released. The next scan can then reuse the same pinned TDS connection while DuckDB consumes the buffered rows.
+
+Autocommit queries continue to stream directly from SQL Server. Explicit transaction reads may use more temporary storage and have higher latency before the first row is returned.
+
 ## Error Handling
 
 | Scenario | Behavior |
@@ -282,6 +292,7 @@ Multiple DuckDB connections can have concurrent transactions against the same SQ
 | ROLLBACK fails | Log warning, continue cleanup, return connection to pool |
 | Transaction abandoned | Destructor closes connection (SQL Server auto-rollback) |
 | Connection dies mid-transaction | IOException on next operation |
+| Multiple transaction scans in one statement | Materialize each result before reusing the pinned connection |
 
 ## State Transition Diagram
 
