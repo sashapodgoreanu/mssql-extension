@@ -220,10 +220,9 @@ void MSSQLTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, Log
 	EnsurePKLoaded(context);
 
 	if (!pk_info_.exists) {
-		throw BinderException(
-			"MSSQL: UPDATE/DELETE requires a table with a primary key. "
-			"Table '%s.%s' has no primary key.",
-			schema.name.c_str(), name.c_str());
+		MSSQL_TE_DEBUG("BindUpdateConstraints: %s.%s has no PK; planner will attempt direct DML pushdown",
+					   schema.name.c_str(), name.c_str());
+		return;
 	}
 
 	MSSQL_TE_DEBUG("BindUpdateConstraints: PK loaded, %zu columns, type=%s", pk_info_.columns.size(),
@@ -350,6 +349,17 @@ bool MSSQLTableEntry::HasPrimaryKey(ClientContext &context) {
 const mssql::PrimaryKeyInfo &MSSQLTableEntry::GetPrimaryKeyInfo(ClientContext &context) {
 	EnsurePKLoaded(context);
 	return pk_info_;
+}
+
+vector<column_t> MSSQLTableEntry::GetRowIdColumns() const {
+	vector<column_t> result;
+	const bool pk_loaded = pk_loaded_.load(std::memory_order_acquire);
+
+	if (object_type_ != MSSQLObjectType::VIEW && pk_loaded && pk_info_.exists) {
+		result.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	}
+
+	return result;
 }
 
 virtual_column_map_t MSSQLTableEntry::GetVirtualColumns() const {

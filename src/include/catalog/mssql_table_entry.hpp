@@ -56,6 +56,11 @@ public:
 	// Note: PK info is lazy-loaded in GetScanFunction(), which is called before this
 	virtual_column_map_t GetVirtualColumns() const override;
 
+	// DuckDB UPDATE/DELETE normally require rowid columns. MSSQL can expose
+	// rowid only when a stable primary key exists; no-PK tables are handled
+	// by direct DML pushdown in MSSQLCatalog instead.
+	vector<column_t> GetRowIdColumns() const override;
+
 	//===----------------------------------------------------------------------===//
 	// MSSQL-specific Accessors
 	//===----------------------------------------------------------------------===//

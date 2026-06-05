@@ -12,6 +12,7 @@
 #include "dml/ctas/mssql_ctas_planner.hpp"
 #include "dml/delete/mssql_delete_target.hpp"
 #include "dml/delete/mssql_physical_delete.hpp"
+#include "dml/direct/mssql_direct_dml.hpp"
 #include "dml/insert/mssql_insert_config.hpp"
 #include "dml/insert/mssql_insert_target.hpp"
 #include "dml/insert/mssql_physical_insert.hpp"
@@ -600,6 +601,31 @@ PhysicalOperator &MSSQLCatalog::PlanCreateTableAs(ClientContext &context, Physic
 	return mssql::CTASPlanner::Plan(context, planner, *this, op, plan);
 }
 
+PhysicalOperator &MSSQLCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) {
+	CheckWriteAccess("DELETE");
+
+	auto &table_entry = op.table.Cast<MSSQLTableEntry>();
+	const auto &pk_info = table_entry.GetPrimaryKeyInfo(context);
+	if (!pk_info.exists) {
+		MSSQLDirectDMLTarget direct_target;
+		string reason;
+		if (!MSSQLDirectDMLPlanner::TryBuildDelete(context, op, table_entry, direct_target, reason)) {
+			throw NotImplementedException(
+				"MSSQL: DELETE on table '%s' without a primary key requires direct DML pushdown, but this statement "
+				"cannot be pushed down: %s",
+				table_entry.name, reason);
+		}
+
+		vector<LogicalType> result_types;
+		result_types.push_back(LogicalType::BIGINT);
+		return planner.Make<MSSQLPhysicalDirectDML>(std::move(result_types), op.estimated_cardinality,
+													std::move(direct_target));
+	}
+
+	auto &plan = planner.CreatePlan(*op.children[0]);
+	return PlanDelete(context, planner, op, plan);
+}
+
 PhysicalOperator &MSSQLCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 										   PhysicalOperator &plan) {
 	// Check write access first (throws if read-only)
@@ -637,6 +663,31 @@ PhysicalOperator &MSSQLCatalog::PlanDelete(ClientContext &context, PhysicalPlanG
 	physical_delete.children.push_back(plan);
 
 	return physical_delete;
+}
+
+PhysicalOperator &MSSQLCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op) {
+	CheckWriteAccess("UPDATE");
+
+	auto &table_entry = op.table.Cast<MSSQLTableEntry>();
+	const auto &pk_info = table_entry.GetPrimaryKeyInfo(context);
+	if (!pk_info.exists) {
+		MSSQLDirectDMLTarget direct_target;
+		string reason;
+		if (!MSSQLDirectDMLPlanner::TryBuildUpdate(context, op, table_entry, direct_target, reason)) {
+			throw NotImplementedException(
+				"MSSQL: UPDATE on table '%s' without a primary key requires direct DML pushdown, but this statement "
+				"cannot be pushed down: %s",
+				table_entry.name, reason);
+		}
+
+		vector<LogicalType> result_types;
+		result_types.push_back(LogicalType::BIGINT);
+		return planner.Make<MSSQLPhysicalDirectDML>(std::move(result_types), op.estimated_cardinality,
+													std::move(direct_target));
+	}
+
+	auto &plan = planner.CreatePlan(*op.children[0]);
+	return PlanUpdate(context, planner, op, plan);
 }
 
 PhysicalOperator &MSSQLCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,

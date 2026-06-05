@@ -13,12 +13,14 @@
 #include "codec/string_codec.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
@@ -138,7 +140,8 @@ std::string FilterEncoder::ValueToSQLLiteral(const Value &value, const LogicalTy
 
 FilterEncoderResult FilterEncoder::Encode(const TableFilterSet *filters, const std::vector<column_t> &column_ids,
 										  const std::vector<std::string> &column_names,
-										  const std::vector<LogicalType> &column_types) {
+										  const std::vector<LogicalType> &column_types,
+										  const std::string &column_qualifier) {
 	FilterEncoderResult result;
 	result.needs_duckdb_filter = false;
 
@@ -150,6 +153,7 @@ FilterEncoderResult FilterEncoder::Encode(const TableFilterSet *filters, const s
 	MSSQL_FILTER_DEBUG_LOG(1, "Encode: encoding %zu filter(s)", filters->filters.size());
 
 	ExpressionEncodeContext ctx(column_ids, column_names, column_types);
+	ctx.column_qualifier = column_qualifier;
 	std::vector<std::string> where_conditions;
 
 	// Virtual/special column identifiers start at 2^63
@@ -190,6 +194,9 @@ FilterEncoderResult FilterEncoder::Encode(const TableFilterSet *filters, const s
 		const std::string &col_name = column_names[table_col_idx];
 		const LogicalType &col_type = column_types[table_col_idx];
 		std::string escaped_col = "[" + EscapeBracketIdentifier(col_name) + "]";
+		if (!column_qualifier.empty()) {
+			escaped_col = "[" + EscapeBracketIdentifier(column_qualifier) + "]." + escaped_col;
+		}
 
 		MSSQL_FILTER_DEBUG_LOG(2, "  encoding filter for column: projected_idx=%llu -> table_idx=%llu -> %s",
 							   (unsigned long long)projected_col_idx, (unsigned long long)table_col_idx,
@@ -392,8 +399,20 @@ ExpressionEncodeResult FilterEncoder::EncodeExpression(const Expression &expr, c
 	MSSQL_FILTER_DEBUG_LOG(2, "EncodeExpression: type=%d class=%d", (int)expr.type, (int)expr.GetExpressionClass());
 
 	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_CAST: {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		if (cast.try_cast) {
+			MSSQL_FILTER_DEBUG_LOG(1, "EncodeExpression: TRY_CAST is not supported for pushdown");
+			return {"", false};
+		}
+		return EncodeExpression(*cast.child, ctx.child());
+	}
+
 	case ExpressionClass::BOUND_COLUMN_REF:
 		return EncodeColumnRef(expr.Cast<BoundColumnRefExpression>(), ctx);
+
+	case ExpressionClass::BOUND_REF:
+		return EncodeReference(expr.Cast<BoundReferenceExpression>(), ctx);
 
 	case ExpressionClass::BOUND_CONSTANT:
 		return EncodeConstant(expr.Cast<BoundConstantExpression>());
@@ -565,6 +584,39 @@ ExpressionEncodeResult FilterEncoder::EncodeOperatorExpression(const BoundOperat
 		return {"(" + child_result.sql + " IS NOT NULL)", true};
 	}
 
+	if (expr.type == ExpressionType::COMPARE_IN || expr.type == ExpressionType::COMPARE_NOT_IN) {
+		if (expr.children.size() < 2) {
+			return {"", false};
+		}
+
+		auto child_ctx = ctx.child();
+		auto input_result = EncodeExpression(*expr.children[0], child_ctx);
+		if (!input_result.supported) {
+			return {"", false};
+		}
+
+		std::vector<std::string> values;
+		values.reserve(expr.children.size() - 1);
+		for (idx_t i = 1; i < expr.children.size(); i++) {
+			auto value_result = EncodeExpression(*expr.children[i], child_ctx);
+			if (!value_result.supported) {
+				return {"", false};
+			}
+			values.push_back(value_result.sql);
+		}
+
+		std::string sql = "(" + input_result.sql;
+		sql += expr.type == ExpressionType::COMPARE_NOT_IN ? " NOT IN (" : " IN (";
+		for (idx_t i = 0; i < values.size(); i++) {
+			if (i > 0) {
+				sql += ", ";
+			}
+			sql += values[i];
+		}
+		sql += "))";
+		return {sql, true};
+	}
+
 	// For other operators, we don't support them yet
 	// Arithmetic is handled via BoundFunctionExpression in DuckDB stable
 	MSSQL_FILTER_DEBUG_LOG(1, "EncodeOperatorExpression: unsupported operator type %d", (int)expr.type);
@@ -659,19 +711,28 @@ ExpressionEncodeResult FilterEncoder::EncodeColumnRef(const BoundColumnRefExpres
 	MSSQL_FILTER_DEBUG_LOG(2, "EncodeColumnRef: table_idx=%llu, column_idx=%llu",
 						   (unsigned long long)binding.table_index, (unsigned long long)binding.column_index);
 
-	// Virtual/special column identifiers start at 2^63
-	constexpr column_t VIRTUAL_COL_START = UINT64_C(9223372036854775808);
-
 	// The column_index from binding refers to the projected column index
 	// We need to map it through column_ids to get the actual table column index
-	column_t projected_idx = binding.column_index;
+	return EncodeProjectedColumn(binding.column_index, ctx);
+}
+
+ExpressionEncodeResult FilterEncoder::EncodeReference(const BoundReferenceExpression &expr,
+													  const ExpressionEncodeContext &ctx) {
+	MSSQL_FILTER_DEBUG_LOG(2, "EncodeReference: projected_idx=%llu", (unsigned long long)expr.index);
+	return EncodeProjectedColumn(expr.index, ctx);
+}
+
+ExpressionEncodeResult FilterEncoder::EncodeProjectedColumn(column_t projected_idx,
+															const ExpressionEncodeContext &ctx) {
+	// Virtual/special column identifiers start at 2^63
+	constexpr column_t VIRTUAL_COL_START = UINT64_C(9223372036854775808);
 
 	column_t table_col_idx;
 	if (ctx.column_ids.empty()) {
 		// No projection - use binding index directly
 		table_col_idx = projected_idx;
 	} else if (projected_idx >= ctx.column_ids.size()) {
-		MSSQL_FILTER_DEBUG_LOG(1, "EncodeColumnRef: column index %llu out of range (projection has %zu)",
+		MSSQL_FILTER_DEBUG_LOG(1, "EncodeProjectedColumn: column index %llu out of range (projection has %zu)",
 							   (unsigned long long)projected_idx, ctx.column_ids.size());
 		return {"", false};
 	} else {
@@ -684,30 +745,38 @@ ExpressionEncodeResult FilterEncoder::EncodeColumnRef(const BoundColumnRefExpres
 		// Only scalar PK can be used in arbitrary expressions
 		if (ctx.HasPKInfo() && !ctx.pk_is_composite) {
 			std::string sql = "[" + EscapeBracketIdentifier((*ctx.pk_column_names)[0]) + "]";
-			MSSQL_FILTER_DEBUG_LOG(2, "EncodeColumnRef: rowid (scalar PK) -> %s", sql.c_str());
+			if (!ctx.column_qualifier.empty()) {
+				sql = "[" + EscapeBracketIdentifier(ctx.column_qualifier) + "]." + sql;
+			}
+			MSSQL_FILTER_DEBUG_LOG(2, "EncodeProjectedColumn: rowid (scalar PK) -> %s", sql.c_str());
 			return {sql, true};
 		}
 		// Composite PK rowid can only be used in equality (handled in EncodeComparisonExpression)
-		MSSQL_FILTER_DEBUG_LOG(1, "EncodeColumnRef: rowid not supported for non-equality (composite PK or no PK info)");
+		MSSQL_FILTER_DEBUG_LOG(1,
+							   "EncodeProjectedColumn: rowid not supported for non-equality (composite PK or no PK "
+							   "info)");
 		return {"", false};
 	}
 
 	// Skip other virtual columns
 	if (table_col_idx >= VIRTUAL_COL_START) {
-		MSSQL_FILTER_DEBUG_LOG(1, "EncodeColumnRef: virtual column %llu not supported",
+		MSSQL_FILTER_DEBUG_LOG(1, "EncodeProjectedColumn: virtual column %llu not supported",
 							   (unsigned long long)table_col_idx);
 		return {"", false};
 	}
 
 	if (table_col_idx >= ctx.column_names.size()) {
-		MSSQL_FILTER_DEBUG_LOG(1, "EncodeColumnRef: table column index %llu out of range (table has %zu)",
+		MSSQL_FILTER_DEBUG_LOG(1, "EncodeProjectedColumn: table column index %llu out of range (table has %zu)",
 							   (unsigned long long)table_col_idx, ctx.column_names.size());
 		return {"", false};
 	}
 
 	const std::string &col_name = ctx.column_names[table_col_idx];
 	std::string sql = "[" + EscapeBracketIdentifier(col_name) + "]";
-	MSSQL_FILTER_DEBUG_LOG(2, "EncodeColumnRef: encoded -> %s", sql.c_str());
+	if (!ctx.column_qualifier.empty()) {
+		sql = "[" + EscapeBracketIdentifier(ctx.column_qualifier) + "]." + sql;
+	}
+	MSSQL_FILTER_DEBUG_LOG(2, "EncodeProjectedColumn: encoded -> %s", sql.c_str());
 	return {sql, true};
 }
 

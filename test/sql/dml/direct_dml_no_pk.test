@@ -1,0 +1,85 @@
+# name: test/sql/dml/direct_dml_no_pk.test
+# description: Test direct UPDATE/DELETE pushdown on MSSQL tables without primary keys
+# group: [mssql]
+
+require mssql
+
+require-env MSSQL_TESTDB_DSN
+
+statement ok
+ATTACH '${MSSQL_TESTDB_DSN}' AS mssql_direct_nopk (TYPE mssql);
+
+statement ok
+DROP TABLE IF EXISTS mssql_direct_nopk.dbo.direct_dml_no_pk_test;
+
+statement ok
+CREATE TABLE mssql_direct_nopk.dbo.direct_dml_no_pk_test (
+    id INTEGER,
+    label VARCHAR(100),
+    qty INTEGER
+);
+
+statement ok
+INSERT INTO mssql_direct_nopk.dbo.direct_dml_no_pk_test VALUES
+    (1, 'one', 10),
+    (2, 'two', 20),
+    (3, 'three', 30),
+    (4, NULL, 40);
+
+# UPDATE without PK: direct pushdown should let SQL Server apply the WHERE
+statement ok
+UPDATE mssql_direct_nopk.dbo.direct_dml_no_pk_test
+SET qty = qty + 5
+WHERE id IN (1, 2);
+
+query IIT
+SELECT id, qty, label FROM mssql_direct_nopk.dbo.direct_dml_no_pk_test WHERE id IN (1, 2) ORDER BY id;
+----
+1	15	one
+2	25	two
+
+# UPDATE a column that would normally be an identifier. This is allowed because the table has no PK.
+statement ok
+UPDATE mssql_direct_nopk.dbo.direct_dml_no_pk_test
+SET id = 30
+WHERE label = 'three';
+
+query IIT
+SELECT id, qty, label FROM mssql_direct_nopk.dbo.direct_dml_no_pk_test WHERE label = 'three';
+----
+30	30	three
+
+# UPDATE with IS NULL predicate
+statement ok
+UPDATE mssql_direct_nopk.dbo.direct_dml_no_pk_test
+SET label = 'was-null'
+WHERE label IS NULL;
+
+query IT
+SELECT id, label FROM mssql_direct_nopk.dbo.direct_dml_no_pk_test WHERE id = 4;
+----
+4	was-null
+
+# DELETE without PK: direct pushdown should let SQL Server apply the WHERE
+statement ok
+DELETE FROM mssql_direct_nopk.dbo.direct_dml_no_pk_test
+WHERE id IN (2, 30);
+
+# UPDATE without PK using UPDATE ... FROM VALUES. DuckLake emits this shape for metadata updates.
+statement ok
+WITH updates(target_id, new_label, new_qty) AS (
+    VALUES (1, 'uno', 100), (4, 'four', 400)
+)
+UPDATE mssql_direct_nopk.dbo.direct_dml_no_pk_test
+SET label = new_label, qty = new_qty
+FROM updates
+WHERE id = target_id;
+
+query IIT
+SELECT id, qty, label FROM mssql_direct_nopk.dbo.direct_dml_no_pk_test ORDER BY id;
+----
+1	100	uno
+4	400	four
+
+statement ok
+DROP TABLE IF EXISTS mssql_direct_nopk.dbo.direct_dml_no_pk_test;

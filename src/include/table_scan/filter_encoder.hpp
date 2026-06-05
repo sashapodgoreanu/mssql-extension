@@ -49,6 +49,7 @@ struct ExpressionEncodeContext {
 	const std::vector<LogicalType> &column_types;  // All table column types
 	int depth;									   // Current recursion depth
 	static constexpr int MAX_DEPTH = 100;		   // Maximum nesting depth
+	std::string column_qualifier;				   // Optional table alias for generated column references
 
 	// PK info for rowid filter pushdown (Spec 001-pk-rowid-semantics)
 	const std::vector<std::string> *pk_column_names = nullptr;
@@ -78,6 +79,7 @@ struct ExpressionEncodeContext {
 		ctx.pk_column_names = pk_column_names;
 		ctx.pk_column_types = pk_column_types;
 		ctx.pk_is_composite = pk_is_composite;
+		ctx.column_qualifier = column_qualifier;
 		return ctx;
 	}
 
@@ -114,7 +116,8 @@ public:
 	 */
 	static FilterEncoderResult Encode(const TableFilterSet *filters, const std::vector<column_t> &column_ids,
 									  const std::vector<std::string> &column_names,
-									  const std::vector<LogicalType> &column_types);
+									  const std::vector<LogicalType> &column_types,
+									  const std::string &column_qualifier = "");
 
 	//--------------------------------------------------------------------------
 	// Utility Functions (public for testing)
@@ -253,6 +256,17 @@ private:
 	 */
 	static ExpressionEncodeResult EncodeColumnRef(const BoundColumnRefExpression &expr,
 												  const ExpressionEncodeContext &ctx);
+
+	/**
+	 * Encode a positional reference into the current projection.
+	 */
+	static ExpressionEncodeResult EncodeReference(const BoundReferenceExpression &expr,
+												  const ExpressionEncodeContext &ctx);
+
+	/**
+	 * Encode a projected column index by resolving it through the scan's column id mapping.
+	 */
+	static ExpressionEncodeResult EncodeProjectedColumn(column_t projected_idx, const ExpressionEncodeContext &ctx);
 
 	/**
 	 * Encode a constant value.

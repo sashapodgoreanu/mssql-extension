@@ -188,6 +188,7 @@ set(EXTENSION_SOURCES
     # DML shared layer (UPDATE/DELETE common)
     src/dml/mssql_dml_config.cpp
     src/dml/mssql_rowid_extractor.cpp
+    src/dml/direct/mssql_direct_dml.cpp
     # DML INSERT layer
     src/dml/insert/mssql_insert_config.cpp
     src/dml/insert/mssql_insert_target.cpp
